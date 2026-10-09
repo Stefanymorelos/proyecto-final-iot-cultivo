@@ -1,0 +1,46 @@
+services:
+  proyectoapp:
+    build: ./proyectoapp
+    ports:
+      - "3000:3000"
+    environment:
+      - ORION_URL=http://orion:1026
+    depends_on:
+      - orion
+
+  orion:
+    image: fiware/orion:latest
+    ports:
+      - "1026:1026"
+    command: -dbURI mongodb://mongo:27017 -logLevel DEBUG
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:4.4
+    volumes:
+      - mongo_data:/data/db
+
+  crate:
+    image: crate:5.10.16
+    ports:
+      - "4200:4200"
+      - "5432:5432"
+    environment:
+      - CRATE_HEAP_SIZE=1g
+    command: crate -Cnetwork.host=_site_
+    volumes:
+      - crate_data:/data
+
+  quantumleap:
+    image: orchestracities/quantumleap:latest
+    ports:
+      - "8668:8668"
+    environment:
+      - CRATE_HOST=crate
+    depends_on:
+      - crate
+
+volumes:
+  mongo_data:
+  crate_data:

@@ -1,155 +1,170 @@
-// ============================================================
-// Proyecto Final IoT - Sistema de monitoreo de cultivo
-// Firmware para ESP32
-//
-// Lee: humedad de suelo, temperatura/humedad ambiente (DHT22),
-//      y luz (LDR). Envia los datos por WiFi a un servidor Flask
-//      via HTTP POST en formato JSON.
-//
-// Autor: Tefa
-// ============================================================
-
 #include <Arduino.h>
+#include <Wire.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include <DHT.h>
-#include "config.h"
+#include <AP3216_WE.h>
+#include <TinyGPS++.h>
 
-DHT dht(PIN_DHT, DHTTYPE);
+// Configuracion Wi-Fi y Servidor
+const char* SSID_WIFI     = "UPBWiFi";
+const char* PASSWORD_WIFI = "";
+const char* URL_SERVIDOR = "http://107.22.82.16:3000/api/plantas";
 
-unsigned long ultimaLectura = 0;
+// Configuracion de Pines I2C
+#define SDA_PIN 21
+#define SCL_PIN 22
 
-// ------------------------------------------------------------
-// Conecta a la red WiFi. Se queda intentando hasta lograrlo,
-// mostrando progreso por el monitor serial.
-// ------------------------------------------------------------
+// Pines del sensor de humedad de suelo
+#define PIN_HUMEDAD_ANALOG  0
+#define PIN_HUMEDAD_DIGITAL 4
+
+// Configuracion de Pines GPS (T-Beam T22_V1.0 / V1.1)
+#define GPS_RX_PIN 34
+#define GPS_TX_PIN 12
+#define GPS_BAUD   9600
+
+#define HDC1080_ADDR 0x40
+
+// Instancias de comunicacion y sensores
+AP3216_WE ap3216 = AP3216_WE(&Wire);
+TinyGPSPlus gps;
+HardwareSerial SerialGPS(1); // Puerto Serie por hardware 1 para el GPS
+
+// Lecturas HDC1080
+float leerTemperaturaHDC1080() {
+  Wire.beginTransmission(HDC1080_ADDR);
+  Wire.write(0x00);
+  if (Wire.endTransmission() != 0) return -999;
+  delay(20);
+  if (Wire.requestFrom(HDC1080_ADDR, 2) == 2) {
+    uint16_t rawTemp = (Wire.read() << 8) | Wire.read();
+    return (rawTemp / 65536.0) * 165.0 - 40.0;
+  }
+  return -999;
+}
+
+float leerHumedadAireHDC1080() {
+  Wire.beginTransmission(HDC1080_ADDR);
+  Wire.write(0x01);
+  if (Wire.endTransmission() != 0) return -999;
+  delay(20);
+  if (Wire.requestFrom(HDC1080_ADDR, 2) == 2) {
+    uint16_t rawHum = (Wire.read() << 8) | Wire.read();
+    return (rawHum / 65536.0) * 100.0;
+  }
+  return -999;
+}
+
 void conectarWiFi() {
-    Serial.print("Conectando a WiFi: ");
-    Serial.println(WIFI_SSID);
+  if (WiFi.status() == WL_CONNECTED) return;
 
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Conectando a Wi-Fi: ");
+  Serial.println(SSID_WIFI);
+  WiFi.begin(SSID_WIFI, PASSWORD_WIFI);
 
-    int intentos = 0;
-    while (WiFi.status() != WL_CONNECTED && intentos < 40) {
-        delay(500);
-        Serial.print(".");
-        intentos++;
-    }
+  int intentos = 0;
+  while (WiFi.status() != WL_CONNECTED && intentos < 20) {
+    delay(500);
+    Serial.print(".");
+    intentos++;
+  }
 
-    if (WiFi.status() == WL_CONNECTED) {
-        Serial.println();
-        Serial.print("Conectado. IP: ");
-        Serial.println(WiFi.localIP());
-    } else {
-        Serial.println();
-        Serial.println("No se pudo conectar al WiFi. Reintentando en el proximo ciclo.");
-    }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\n[OK] Conectado a Wi-Fi.");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\n[ERROR] No se pudo conectar a Wi-Fi.");
+  }
 }
 
-// ------------------------------------------------------------
-// Convierte la lectura cruda del ADC de humedad de suelo (0-4095)
-// a un porcentaje 0-100%, usando los valores de calibracion
-// definidos en config.h.
-// ------------------------------------------------------------
-float leerHumedadSuelo() {
-    int valorCrudo = analogRead(PIN_HUMEDAD_SUELO);
+void enviarDatosServidor(float temp, float humAire, float lux, int humSueloPorc, int humSueloRaw, bool seco, double lat, double lng, double alt, int sats) {
+  if (WiFi.status() != WL_CONNECTED) return;
 
-    // mapea: SECO -> 0%, MOJADO -> 100%
-    float porcentaje = map(valorCrudo, HUMEDAD_VALOR_SECO, HUMEDAD_VALOR_MOJADO, 0, 100);
+  HTTPClient http;
+  http.begin(URL_SERVIDOR);
+  http.addHeader("Content-Type", "application/json");
 
-    // por si el mapeo se sale de rango (ruido electrico, sensor desconectado)
-    porcentaje = constrain(porcentaje, 0, 100);
+  char jsonPayload[384];
+  snprintf(jsonPayload, sizeof(jsonPayload),
+    "{\"temperatura_aire\":%.2f,\"humedad_aire\":%.2f,\"luz_lux\":%.2f,\"humedad_suelo_pct\":%d,\"humedad_suelo_raw\":%d,\"alerta_seco\":%s,\"latitud\":%.6f,\"longitud\":%.6f,\"altitud\":%.2f,\"satelites\":%d}",
+    temp, humAire, lux, humSueloPorc, humSueloRaw, seco ? "true" : "false", lat, lng, alt, sats
+  );
 
-    return porcentaje;
-}
-
-// ------------------------------------------------------------
-// Lee el sensor de luz (LDR). Por ahora devuelve el valor crudo
-// del ADC (0-4095); mas adelante se puede convertir a lux si
-// se conoce la curva de respuesta del LDR especifico.
-// ------------------------------------------------------------
-int leerLuz() {
-    return analogRead(PIN_LUZ);
-}
-
-// ------------------------------------------------------------
-// Arma el JSON con todas las lecturas y lo envia por HTTP POST
-// al servidor Flask.
-// ------------------------------------------------------------
-void enviarDatos(float humedadSuelo, float temperatura, float humedadAmbiente, int luz) {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Sin WiFi, no se puede enviar. Se omite este ciclo.");
-        return;
-    }
-
-    HTTPClient http;
-    http.begin(SERVER_URL);
-    http.addHeader("Content-Type", "application/json");
-
-    JsonDocument doc;
-    doc["device_id"] = DEVICE_ID;
-    doc["humedad_suelo"] = humedadSuelo;
-    doc["temperatura"] = temperatura;
-    doc["humedad_ambiente"] = humedadAmbiente;
-    doc["luz"] = luz;
-    doc["timestamp_uptime_ms"] = millis(); // el servidor le pone el timestamp real al llegar
-
-    String payload;
-    serializeJson(doc, payload);
-
-    Serial.println("Enviando: " + payload);
-
-    int codigoRespuesta = http.POST(payload);
-
-    if (codigoRespuesta > 0) {
-        Serial.printf("Respuesta del servidor: %d\n", codigoRespuesta);
-        Serial.println(http.getString());
-    } else {
-        Serial.printf("Error al enviar: %s\n", http.errorToString(codigoRespuesta).c_str());
-    }
-
-    http.end();
+  int httpCode = http.POST(jsonPayload);
+  if (httpCode > 0) {
+    Serial.printf("[HTTP] Respuesta servidor: %d\n", httpCode);
+  } else {
+    Serial.printf("[HTTP] Error enviando POST: %s\n", http.errorToString(httpCode).c_str());
+  }
+  http.end();
 }
 
 void setup() {
-    Serial.begin(115200);
-    delay(1000);
+  Serial.begin(115200);
+  delay(1000);
 
-    Serial.println("\n=== Sistema de monitoreo de cultivo ===");
+  Serial.println("\n--- Sistema de Monitoreo con GPS y Wi-Fi ---");
 
-    dht.begin();
-    conectarWiFi();
+  pinMode(PIN_HUMEDAD_ANALOG, INPUT);
+  pinMode(PIN_HUMEDAD_DIGITAL, INPUT);
 
-    // primera lectura inmediata al arrancar, sin esperar el intervalo completo
-    ultimaLectura = millis() - INTERVALO_LECTURA_MS;
+  // 1. Inicializacion I2C
+  Wire.begin(SDA_PIN, SCL_PIN, 100000);
+  ap3216.init();
+  ap3216.setMode(AP3216_ALS_PS);
+
+  // 2. Inicializacion del GPS nativo
+  SerialGPS.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+
+  conectarWiFi();
 }
 
 void loop() {
-    // reconecta si se cayo el WiFi
-    if (WiFi.status() != WL_CONNECTED) {
-        conectarWiFi();
+  // Procesar tramas del GPS en segundo plano
+  while (SerialGPS.available() > 0) {
+    gps.encode(SerialGPS.read());
+  }
+
+  static unsigned long ultimaLectura = 0;
+  if (millis() - ultimaLectura >= 5000) { // Cada 5 segundos
+    ultimaLectura = millis();
+
+    if (WiFi.status() != WL_CONNECTED) conectarWiFi();
+
+    // Lecturas ambientales
+    float tempAire = leerTemperaturaHDC1080();
+    float humAire = leerHumedadAireHDC1080();
+    float lux = ap3216.getAmbientLight();
+
+    // Lecturas del suelo
+    int humedadSueloRaw = analogRead(PIN_HUMEDAD_ANALOG);
+    int estadoDigital = digitalRead(PIN_HUMEDAD_DIGITAL);
+    int humedadSueloPorcentaje = map(humedadSueloRaw, 4095, 1500, 0, 100);
+    humedadSueloPorcentaje = constrain(humedadSueloPorcentaje, 0, 100);
+    bool estaSeco = (estadoDigital == HIGH);
+
+    // Datos del GPS
+    double latitud = gps.location.isValid() ? gps.location.lat() : 0.0;
+    double longitud = gps.location.isValid() ? gps.location.lng() : 0.0;
+    double altitud = gps.altitude.isValid() ? gps.altitude.meters() : 0.0;
+    int satelites = gps.satellites.isValid() ? gps.satellites.value() : 0;
+
+    // Impresion por pantalla
+    Serial.println("=== MONITOREO DE PLANTA ===");
+    Serial.printf("Temp / Hum Aire : %.2f C | %.2f %%\n", tempAire, humAire);
+    Serial.printf("Luz Ambiental   : %.2f Lux\n", lux);
+    Serial.printf("Humedad Suelo   : %d %% (RAW: %d)\n", humedadSueloPorcentaje, humedadSueloRaw);
+
+    if (gps.location.isValid()) {
+      Serial.printf("Ubicacion GPS   : Lat: %.6f, Lng: %.6f, Alt: %.1fm (%d sats)\n", latitud, longitud, altitud, satelites);
+    } else {
+      Serial.printf("GPS             : Buscando satelites... (%d detectados)\n", satelites);
     }
 
-    if (millis() - ultimaLectura >= INTERVALO_LECTURA_MS) {
-        ultimaLectura = millis();
+    // Envio via HTTP POST
+    enviarDatosServidor(tempAire, humAire, lux, humedadSueloPorcentaje, humedadSueloRaw, estaSeco, latitud, longitud, altitud, satelites);
 
-        float humedadSuelo = leerHumedadSuelo();
-        float temperatura = dht.readTemperature();
-        float humedadAmbiente = dht.readHumidity();
-        int luz = leerLuz();
-
-        // el DHT22 a veces falla una lectura puntual; si pasa, se detecta con isnan()
-        if (isnan(temperatura) || isnan(humedadAmbiente)) {
-            Serial.println("Error leyendo el DHT22, se omite esta lectura de temp/humedad.");
-        } else {
-            Serial.printf("Humedad suelo: %.1f%% | Temp: %.1fC | Humedad amb: %.1f%% | Luz: %d\n",
-                          humedadSuelo, temperatura, humedadAmbiente, luz);
-
-            enviarDatos(humedadSuelo, temperatura, humedadAmbiente, luz);
-        }
-    }
-
-    delay(100);
+    Serial.println("---------------------------\n");
+  }
 }
