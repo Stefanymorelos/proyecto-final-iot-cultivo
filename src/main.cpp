@@ -8,7 +8,7 @@
 // Configuracion Wi-Fi y Servidor
 const char* SSID_WIFI     = "UPBWiFi";
 const char* PASSWORD_WIFI = "";
-const char* URL_SERVIDOR = "http://107.22.82.16:3000/api/plantas";
+const char* URL_SERVIDOR = "http://34.227.231.151:3000/api/plantas";
 
 // Configuracion de Pines I2C
 #define SDA_PIN 21
