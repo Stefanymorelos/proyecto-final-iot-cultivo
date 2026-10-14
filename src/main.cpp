@@ -15,7 +15,7 @@ const char* URL_SERVIDOR = "http://34.227.231.151/api/plantas";
 #define SCL_PIN 22
 
 // Pines del sensor de humedad de suelo
-#define PIN_HUMEDAD_ANALOG  0
+#define PIN_HUMEDAD_ANALOG  39
 #define PIN_HUMEDAD_DIGITAL 4
 
 // Configuracion de Pines GPS (T-Beam T22_V1.0 / V1.1)
