@@ -2,7 +2,7 @@ services:
   proyectoapp:
     build: ./proyectoapp
     ports:
-      - "3000:3000"
+      - "80:3000"
     environment:
       - ORION_URL=http://orion:1026
     depends_on:
