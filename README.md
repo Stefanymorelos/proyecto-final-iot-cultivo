@@ -1,4 +1,4 @@
-# Sistema de monitoreo de cultivo con IoT
+﻿# Sistema de monitoreo de cultivo con IoT
 
 Proyecto final del curso de IoT. Sonda con sensores de temperatura/humedad
 ambiente (HDC1080), luz ambiental (AP3216), humedad de suelo (capacitivo)
@@ -96,7 +96,7 @@ Ver la carpeta servidor/ para la configuracion completa.
 [x] Prueba end-to-end: dato simulado llega hasta CrateDB via QuantumLeap
 [ ] Medidas de los sensores + diseno del case en 3D (OpenSCAD/Tinkercad)
 [ ] Impresion 3D y montaje fisico
-[ ] Carga del firmware al ESP32 real y pruebas con datos reales
+[x] Carga del firmware al ESP32 real y pruebas con datos reales
 [ ] Dashboard de visualizacion
 [ ] Sistema de alertas (umbrales + notificacion)
 [ ] Siembra y pruebas con la planta real
@@ -105,3 +105,8 @@ Ver la carpeta servidor/ para la configuracion completa.
 ## Licencia
 
 Proyecto academico - Universidad Pontificia Bolivariana, curso de IoT.
+
+## Documentacion tecnica
+
+Decisiones, cableado, calibracion del sensor, configuracion de red/servidor y problemas conocidos: [docs/notas-tecnicas.md](docs/notas-tecnicas.md)
+
