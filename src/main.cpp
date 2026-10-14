@@ -140,7 +140,7 @@ void loop() {
     // Lecturas del suelo
     int humedadSueloRaw = analogRead(PIN_HUMEDAD_ANALOG);
     int estadoDigital = digitalRead(PIN_HUMEDAD_DIGITAL);
-    int humedadSueloPorcentaje = map(humedadSueloRaw, 4095, 1500, 0, 100);
+    int humedadSueloPorcentaje = map(humedadSueloRaw, 4095, 2300, 0, 100);
     humedadSueloPorcentaje = constrain(humedadSueloPorcentaje, 0, 100);
     bool estaSeco = (estadoDigital == HIGH);
 
